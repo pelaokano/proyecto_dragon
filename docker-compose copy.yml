@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_server
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: opcua_db
+      MYSQL_USER: opcua_user
+      MYSQL_PASSWORD: opcua_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - opcua_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mqtt_broker:
+    image: eclipse-mosquitto:2.0
+    container_name: mqtt_broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf   # <-- Aquí se monta el archivo de configuración
+    networks:
+      - opcua_net
+
+  opcua_server:
+    build: .
+    container_name: opcua_server
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mqtt_broker:
+        condition: service_started
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: opcua_user
+      MYSQL_PASSWORD: opcua_pass
+      MYSQL_DB: opcua_db
+      MQTT_HOST: mqtt_broker
+      MQTT_PORT: 1883
+    ports:
+      - "4840:4840"
+      - "1502:1502"
+    networks:
+      - opcua_net
+
+volumes:
+  mysql_data:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  opcua_net:
+    driver: bridge

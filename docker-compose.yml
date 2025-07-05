@@ -1,0 +1,126 @@
+version: "3.9"
+
+networks:
+  opcua_net:            # red bridge única
+    driver: bridge
+
+volumes:
+  mysql_data:
+  mosquitto_data:
+  mosquitto_log:
+
+services:
+  # ──────────────────────────────
+  # 1. Base de datos MySQL
+  # ──────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_server
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: opcua_db
+      MYSQL_USER: opcua_user
+      MYSQL_PASSWORD: opcua_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./opcua_mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - opcua_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────
+  # 2. Broker MQTT (Mosquitto)
+  # ──────────────────────────────
+  mqtt_broker:
+    image: eclipse-mosquitto:2.0
+    container_name: mqtt_broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+      - ./opcua_mysql/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - opcua_net
+
+  # ──────────────────────────────
+  # 3. Servidor OPC‑UA + Modbus + publicador MQTT (Python)
+  #    (directorio opcua_mysql/)
+  # ──────────────────────────────
+  opcua_server:
+    build:
+      context: ./opcua_mysql        # <── carpeta con tu Dockerfile y scripts python
+      dockerfile: Dockerfile
+    container_name: opcua_server
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mqtt_broker:
+        condition: service_started
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: opcua_user
+      MYSQL_PASSWORD: opcua_pass
+      MYSQL_DB: opcua_db
+      MQTT_HOST: mqtt_broker
+      MQTT_PORT: 1883
+    ports:
+      - "4840:4840"   # OPC‑UA
+      - "502:502"   # Modbus TCP
+    networks:
+      - opcua_net
+
+  # ──────────────────────────────
+  # 4. Outstation DNP3 (C++)
+  #    (directorio server_dnp3/)
+  # ──────────────────────────────
+  dnp3_outstation:
+    build:
+      context: ./server_dnp3
+      dockerfile: Dockerfile
+    container_name: dnp3_outstation
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_USER: opcua_user
+      DB_PASS: opcua_pass
+      DB_NAME: opcua_db
+    # expón aquí el puerto DNP3 que uses; por ejemplo 20000
+    ports:
+      - "20000:20000"
+    networks:
+      - opcua_net
+
+  # ──────────────────────────────
+  # 5. Servidor MMS IEC‑61850 (C)
+  #    (directorio server_mms/)
+  # ──────────────────────────────
+  mms_server:
+    build:
+      context: ./server_mms
+      dockerfile: Dockerfile
+    container_name: mms_server
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_USER: opcua_user
+      DB_PASS: opcua_pass
+      DB_NAME: opcua_db
+    ports:
+      - "102:102"   # puerto MMS por defecto en tu Dockerfile
+    networks:
+      - opcua_net
