@@ -1,0 +1,5 @@
+__pycache__/
+
+docker-compose copy.yml
+Dockerfile copy
+requirements.txt
